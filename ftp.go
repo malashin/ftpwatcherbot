@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/malashin/cpbftpchk/xftp"
 )
@@ -29,6 +30,7 @@ func (f *FtpConn) Quit() {
 
 func (f *FtpConn) DialAndLogin(addr string) {
 	f.ResetError()
+	f.Log(Debug, "DIAL_AND_LOGIN: Connecting to "+addr)
 	conn, err := xftp.New(addr)
 	if err != nil {
 		f.Error(err)
@@ -36,10 +38,10 @@ func (f *FtpConn) DialAndLogin(addr string) {
 	}
 	f.conn = conn
 	f.connected = true
-	f.Log(Debug, "DIAL_AND_LOGIN: Connected to"+addr)
+	f.Log(Debug, "DIAL_AND_LOGIN: Connected to "+addr)
 }
 
-func (f *FtpConn) Cwd() string {
+func (f *FtpConn) Pwd() string {
 	if f.GetError() != nil {
 		return ""
 	}
@@ -51,24 +53,40 @@ func (f *FtpConn) Cwd() string {
 	return cwd
 }
 
-func (f *FtpConn) Cd(path string) {
+func (f *FtpConn) Cd(path string) error {
 	if f.GetError() != nil {
-		return
+		return f.GetError()
 	}
+	f.Log(Debug, "CD: "+path)
 	err := f.conn.ChangeDir(path)
 	if err != nil {
-		f.Error(err)
-		return
+		if !strings.HasPrefix(err.Error(), "550") {
+			f.Error(err)
+			return err
+		}
+		f.Log(Warning, "CD: "+f.Pwd()+"/"+path+": "+err.Error())
+		return err
 	}
-	f.Log(Debug, "CWD: "+f.Cwd())
+	// f.Log(Debug, "PWD: "+f.Pwd())
+	return nil
 }
 
-func (f *FtpConn) CdUp() {
+func (f *FtpConn) CdUp() error {
 	if f.GetError() != nil {
-		return
+		return f.GetError()
 	}
-	f.conn.ChangeDirToParent()
-	f.Log(Debug, "CWD: "+f.Cwd())
+	f.Log(Debug, "CDUP: "+f.Pwd())
+	err := f.conn.ChangeDirToParent()
+	if err != nil {
+		if !strings.HasPrefix(err.Error(), "550") {
+			f.Error(err)
+			return err
+		}
+		f.Log(Warning, "CDUP: "+err.Error())
+		return err
+	}
+	// f.Log(Debug, "PWD: "+f.Pwd())
+	return nil
 }
 
 func (f *FtpConn) Ls(path string) (entries []xftp.TEntry) {
@@ -91,12 +109,12 @@ func (f *FtpConn) Ls(path string) (entries []xftp.TEntry) {
 	return entries
 }
 
-func (f *FtpConn) Walk(fl map[string]FileEntry, foundFiles *FoundFiles, fileNameMask *regexp.Regexp, ignoreFoldersMask *regexp.Regexp) {
+func (f *FtpConn) Walk(fl map[string]FileEntry, foundFiles *FoundFiles, fileMask *regexp.Regexp, fileMaskIgnore *regexp.Regexp, folderMask *regexp.Regexp, folderMaskIgnore *regexp.Regexp) {
 	if f.GetError() != nil {
 		return
 	}
 	entries := f.Ls("")
-	cwd := f.Cwd()
+	cwd := f.Pwd()
 
 	// Add "/" to cwd path
 	if cwd != "/" {
@@ -110,16 +128,16 @@ func (f *FtpConn) Walk(fl map[string]FileEntry, foundFiles *FoundFiles, fileName
 	for _, element := range entries {
 		switch element.Type {
 		case xftp.File:
-			if AcceptFileName(element.Name, fileNameMask) {
+			if AcceptFileName(element.Name, fileMask) && !AcceptFileName(element.Name, fileMaskIgnore) {
 				key := cwd + element.Name
 				entry, fileExists := fl[key]
 				if fileExists {
-					if !entry.Time.Equal(element.Time) {
+					if entry.Size != element.Size {
 						// Old file with new size
 						f.Log(Notice, "~ "+TruncPad(key, 64, 'l')+" size changed")
 						fl[key] = NewFileEntry(element)
 						foundFiles.AddChangedSize(key)
-					} else if entry.Size != element.Size {
+					} else if !entry.Time.Equal(element.Time) {
 						// Old file with new date
 						f.Log(Notice, "~ "+TruncPad(key, 64, 'l')+" datetime changed")
 						fl[key] = NewFileEntry(element)
@@ -137,12 +155,16 @@ func (f *FtpConn) Walk(fl map[string]FileEntry, foundFiles *FoundFiles, fileName
 				}
 			}
 		case xftp.Folder:
-			if ignoreFoldersMask.MatchString(cwd + element.Name) {
-				f.Log(Debug, "WALK: Ignoring folder \"", cwd+element.Name, "\"")
-			} else if !(element.Name == "." || element.Name == "..") {
-				f.Cd(element.Name)
-				f.Walk(fl, foundFiles, fileNameMask, ignoreFoldersMask)
-				f.CdUp()
+			if !(element.Name == "." || element.Name == "..") && AcceptFileName(cwd+element.Name, folderMask) && !AcceptFileName(cwd+element.Name, folderMaskIgnore) {
+				err := f.Cd(element.Name)
+				if err != nil {
+					continue
+				}
+				f.Walk(fl, foundFiles, fileMask, fileMaskIgnore, folderMask, folderMaskIgnore)
+				err = f.CdUp()
+				if err != nil {
+					continue
+				}
 			}
 		}
 	}

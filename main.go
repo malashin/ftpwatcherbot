@@ -13,14 +13,16 @@ import (
 )
 
 type config struct {
-	TGChatID             string
-	LogPath              string
-	FileListPath         string
-	FTPLogin             string
-	FTPRootPath          string
-	FTPFileNameMask      *regexp.Regexp
-	FTPIgnoreFoldersMask *regexp.Regexp
-	LastUpdate           string
+	TGChatID            string
+	LogPath             string
+	FileListPath        string
+	FTPLogin            string
+	FTPRootPath         string
+	FTPFileMask         *regexp.Regexp
+	FTPFileMaskIgnore   *regexp.Regexp
+	FTPFolderMask       *regexp.Regexp
+	FTPFolderMaskIgnore *regexp.Regexp
+	LastUpdate          string
 }
 
 var c xftp.IFtp
@@ -28,7 +30,7 @@ var err error
 
 var fileListRe = regexp.MustCompile(`\?\{(.*)\?\}(.*)\?\|(\d+)\?\|(.*)$`)
 
-var sleepTime = 15 * time.Minute
+var sleepTime = 30 * time.Minute
 var lastLine string
 
 // var botToken = ""
@@ -110,7 +112,7 @@ func StartJob(b *tb.Bot, cfg *config, binPath string) {
 	if ftpConn.GetError() == nil {
 		foundFiles := FoundFiles{}
 		logger.Log(Debug, "Looking for new files...")
-		ftpConn.Walk(fileList.files, &foundFiles, cfg.FTPFileNameMask, cfg.FTPIgnoreFoldersMask)
+		ftpConn.Walk(fileList.files, &foundFiles, cfg.FTPFileMask, cfg.FTPFileMaskIgnore, cfg.FTPFolderMask, cfg.FTPFolderMaskIgnore)
 		fmt.Print(Pad("", len(lastLine)) + "\r")
 
 		// Terminate the FTP connection.
